@@ -78,5 +78,16 @@ pm.test("返回结果是否JSON格式化", function () {
   }).not.to.throw();
 });
 
+ const responseData = pm.response.json();
+ 
+pm.expect(responseData).to.have.property('id');
+pm.expect(responseData).to.have.all.keys('jsonrpc', 'id', 'result');
+pm.expect(responseData).to.be.an('object');
+pm.expect(responseData.id).to.exist.and.to.be.a('number').and.to.satisfy(Number.isInteger, "Value should be an integer");
+pm.expect(responseData.result).to.not.be.null;
+pm.expect(pm.response.responseTime).to.be.below(200);
+pm.expect(pm.response.headers.get('Content-Type')).to.equal('application/json');
+ pm.expect(responseData.result).to.be.a('boolean');
+
 ```
 
