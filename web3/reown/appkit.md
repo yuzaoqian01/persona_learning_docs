@@ -10,6 +10,8 @@ pnpm add @reown/appkit @reown/appkit-universal-connector @reown/appkit-common et
 
 您可以使用要支持的网络配置通用连接器。有关更多信息，请访问我们文档中的 [RPC 参考](https://docs.reown.com/advanced/multichain/rpc-reference/cosmos-rpc)部分。
 
+源码配置
+
 provider.ts
 
 ```ts
@@ -196,7 +198,7 @@ AppKit 提供了一套全面的 React 钩子，它们协同工作以提供完整
 
 `eip155`
 
-### 视图控制
+### 视图控制(web3modal Scuffold UI)
 
 `Connect`
 
@@ -659,3 +661,482 @@ createAppKit({
 })
 ```
 
+## 三 Adapter
+
+### Wagmi适配器
+
+WagmiAdapter 使用 Wagmi 库与基于以太坊的网络集成。
+
+**主要特点：**
+
+- 与 Wagmi 的配置系统完全集成
+- 支持符合 EIP-1193 标准的钱包
+- ENS 名称解析和头像获取
+- 交易建立和发送
+- 合约交互
+- 帐户和网络变化的事件监听器
+
+```js
+// Connect to a wallet
+async connect(params: AdapterBlueprint.ConnectParams): Promise<AdapterBlueprint.ConnectResult>
+
+// Sign a message
+async signMessage(params: AdapterBlueprint.SignMessageParams): Promise<AdapterBlueprint.SignMessageResult>
+
+// Send a transaction
+async sendTransaction(params: AdapterBlueprint.SendTransactionParams): Promise<AdapterBlue
+```
+
+### EthersAdapter 和 Ethers5Adapter
+
+这些适配器使用 ethers.js（分别为 v6+ 和 v5）与以太坊网络交互。
+
+**主要特点：**
+
+- 与 ethers.js 提供商直接集成
+- 支持 EIP-6963 钱包发现
+- ENS 解析
+- Gas 估算和交易处理
+- 钱包连接状态的事件监听器
+
+```js
+// Create ethers configuration
+private async createEthersConfig(options: AppKitOptions)
+
+// Listen for provider events
+private listenProviderEvents(provider: Provider | CombinedProvider)
+
+// Switch networks
+public override async switchNetwork(params: AdapterBlueprint.SwitchNetworkParams): Pr
+```
+
+### Solana适配器
+
+SolanaAdapter 提供与 Solana 区块链的集成。
+
+**主要特点：**
+
+- 连接到 Solana RPC 端点
+- 支持各种 Solana 钱包适配器
+- 交易创建和签名
+- 通过 RPC 检查余额
+- Solana 钱包状态的事件监听器
+
+```js
+// Sign a message
+public async signMessage(params: AdapterBlueprint.SignMessageParams): Promise<AdapterBlueprint.SignMessageResult>
+
+// Send a transaction
+public async sendTransaction(params: AdapterBlueprint.SendTransactionParams): Promise<AdapterBlueprint.SendTransactionResult>
+```
+
+### 比特币适配器
+
+BitcoinAdapter 提供与比特币区块链的集成。
+
+**主要特点：**
+
+- 支持比特币钱包（Xverse、Leather 等）
+- 通过BitcoinApi管理UTXO
+- 使用不同的协议（ECDSA、BIP322）对消息进行签名
+- 多地址用途支持（付款、序数、堆栈）
+
+```js
+// Connect to a wallet
+override async connect(params: AdapterBlueprint.ConnectParams): Promise<AdapterBlueprint.ConnectResult>
+
+// Sign a message
+override async signMessage(params: AdapterBlueprint.SignMessageParams): Promise<AdapterBlueprint.SignMessageResult>
+```
+
+## 核心适配器功能
+
+所有适配器都实现了由类定义的一组一致的方法`AdapterBlueprint`：
+
+### 连接管理
+
+- `connect(params)`：与钱包提供商建立连接
+- `disconnect(params)`：终止与钱包提供商的连接
+- `syncConnectors(options, appKit)`：将可用连接器与当前状态同步
+- `syncConnection(params)`：同步当前连接状态
+
+### 事务操作
+
+- `signMessage(params)`：使用连接的钱包签署消息
+- `sendTransaction(params)`：向区块链发送交易
+- `writeContract(params)`：执行合约方法
+- `estimateGas(params)`：估算交易的 gas 成本
+
+### 帐户信息
+
+- `getAccounts(params)`：从连接的钱包中检索账户
+- `getBalance(params)`：获取特定地址的余额
+- `getProfile(params)`：检索个人资料信息（例如 ENS 数据）
+
+### 网管
+
+- `switchNetwork(params)`：更改连接的网络
+- `getEnsAddress(params)`：将 ENS 名称解析为地址
+
+### 多链集成示例
+
+```ts
+import { createAppKit } from '@reown/appkit';
+import { EthersAdapter } from '@reown/appkit-adapter-ethers';
+import { SolanaAdapter } from '@reown/appkit-adapter-solana';
+import { BitcoinAdapter } from '@reown/appkit-adapter-bitcoin';
+import { 
+  mainnet, polygon, sepolia,
+  solana, solanaDevnet,
+  bitcoin, bitcoinTestnet
+} from '@reown/appkit/networks';
+
+// Create adapters for each blockchain
+const ethersAdapter = new EthersAdapter({
+  networks: [mainnet, polygon, sepolia],
+  projectId: 'YOUR_PROJECT_ID'
+});
+
+const solanaAdapter = new SolanaAdapter({
+  networks: [solana, solanaDevnet]
+});
+
+const bitcoinAdapter = new BitcoinAdapter({
+  networks: [bitcoin, bitcoinTestnet]
+});
+
+// Create and configure AppKit with all adapters
+const appKit = createAppKit({
+  adapters: [ethersAdapter, solanaAdapter, bitcoinAdapter],
+  networks: [
+    mainnet, polygon, sepolia,
+    solana, solanaDevnet,
+    bitcoin, bitcoinTestnet
+  ],
+  projectId: 'YOUR_PROJECT_ID'
+});
+```
+
+### 自定义RPC
+
+```ts
+const customRpcUrls = {
+  'eip155:1': [{ 
+    url: 'https://your-custom-mainnet-url.com',
+    config: {
+      fetchOptions: {
+        headers: {
+          'Content-Type': 'text/plain'
+        }
+      }
+    }
+  }],
+  'eip155:137': [{ url: 'https://your-custom-polygon-url.com' }]
+};
+
+// Pass to both adapter and AppKit
+const wagmiAdapter = new WagmiAdapter({
+  networks: [mainnet, polygon],
+  projectId: 'YOUR_PROJECT_ID',
+  customRpcUrls
+});
+
+const appKit = createAppKit({
+  adapters: [wagmiAdapter],
+  networks: [mainnet, polygon],
+  projectId: 'YOUR_PROJECT_ID',
+  customRpcUrls
+});
+```
+
+## 自定义 RPC URL
+
+AppKit 允许覆盖网络的默认 RPC URL。这对于连接到自定义 RPC 端点或配置特定的传输选项非常有用。
+
+```ts
+const customRpcUrls = {
+  'eip155:1': [{ url: 'https://your-custom-mainnet-url.com' }],
+  'eip155:137': [{ url: 'https://your-custom-polygon-url.com' }]
+};
+
+const appKit = createAppKit({
+  projectId: 'YOUR_PROJECT_ID',
+  networks: [...],
+  adapters: [...],
+  customRpcUrls: customRpcUrls
+});
+```
+
+您还可以传递其他传输配置选项：
+
+```ts
+const customRpcUrls = {
+  'eip155:1': [{
+    url: 'https://your-custom-mainnet-url.com',
+    config: {
+      fetchOptions: {
+        headers: {
+          'Content-Type': 'text/plain'
+        }
+      }
+    }
+  }]
+};
+```
+
+如果您使用 Wagmi 适配器，则需要将相同的`customRpcUrls`配置传递给适配器和 AppKit：
+
+```ts
+const wagmiAdapter = new WagmiAdapter({
+  networks: [...],
+  projectId: "project-id",
+  customRpcUrls: customRpcUrls
+});
+
+const appKit = createAppKit({
+  adapters: [wagmiAdapter],
+  networks: [...],
+  projectId: "project-id",
+  customRpcUrls: customRpcUrls
+});
+```
+
+### 连接器类型顺序
+
+自定义模式中连接选项的顺序：
+
+```ts
+const appKit = createAppKit({
+  adapters: [ethersAdapter],
+  networks: [mainnet],
+  projectId: 'YOUR_PROJECT_ID',
+  features: {
+    connectorTypeOrder: ['injected', 'walletConnect', 'recent']
+  }
+});
+```
+
+### 命名空间特定的操作
+
+AppKit 支持针对特定区块链命名空间的操作：
+
+### 打开特定命名空间的模式
+
+```ts
+// Open modal for Ethereum
+appKit.open({ namespace: 'eip155' });
+
+// Open connect view for Solana
+appKit.open({ view: 'Connect', namespace: 'solana' });
+
+// Open account view for Bitcoin
+appKit.open({ view: 'Account', namespace: 'bip122' });
+```
+
+资料来源：`packages/scaffold-ui/CHANGELOG.md`
+
+### 断开特定命名空间
+
+```ts
+// Using hooks in React
+const { disconnect } = useDisconnect();
+
+// Disconnect only Solana
+disconnect({ namespace: 'solana' });
+
+// Disconnect all chains
+disconnect();
+```
+
+## 高级集成
+
+### 在 React 中使用 Hooks
+
+AppKit 提供了 React hooks，以便于集成：
+
+```ts
+import { 
+  useAppKit,
+  useAppKitAccount,
+  useAppKitNetwork,
+  useConnect,
+  useDisconnect,
+  useSwitchNetwork
+} from '@reown/appkit/react';
+
+function MyComponent() {
+  // Core AppKit hooks
+  const { open, close } = useAppKit();
+  const { address, isConnected } = useAppKitAccount();
+  const { network } = useAppKitNetwork();
+
+  // Action hooks
+  const { connect, isPending: isConnecting } = useConnect();
+  const { disconnect } = useDisconnect();
+  const { switchNetwork } = useSwitchNetwork();
+  
+  // Get chain-specific account data
+  const ethAccount = useAppKitAccount({ chainNamespace: 'eip155' });
+  const solAccount = useAppKitAccount({ chainNamespace: 'solana' });
+  const btcAccount = useAppKitAccount({ chainNamespace: 'bip122' });
+
+  return (
+    <div>
+      {isConnected ? (
+        <>
+          <div>Connected: {address}</div>
+          <div>Network: {network.name}</div>
+          <button onClick={() => disconnect()}>Disconnect</button>
+          <button onClick={() => switchNetwork('eip155:5')}>
+            Switch to Goerli
+          </button>
+        </>
+      ) : (
+        <button onClick={() => open()} disabled={isConnecting}>
+          Connect Wallet
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+## 可用网络
+
+AppKit 提供了预定义的网络配置：
+
+```ts
+// apps/laboratory/src/utils/ConstantsUtil.ts
+import {
+  // Ethereum networks
+  mainnet, optimism, polygon, zkSync, arbitrum, base, 
+  baseSepolia, sepolia, gnosis, hedera, aurora, mantle,
+  
+  // Solana networks
+  solana, solanaDevnet, solanaTestnet,
+  
+  // Bitcoin networks
+  bitcoin, bitcoinTestnet
+} from '@reown/appkit/networks';
+```
+
+## 四、Connection连接方法
+
+## 连接方法
+
+AppKit 支持多种连接方式，以适应各种用户偏好和钱包类型：
+
+### 1. WalletConnect
+
+WalletConnect 支持通过二维码扫描或深度链接连接到移动钱包应用。该功能由 WalletConnect 的 Universal Provider 实现。
+
+```js
+// WalletConnect connection flow
+async connectWalletConnect(chainId?: number | string) {
+  // Authenticate with WalletConnect connector
+  const walletConnectConnector = this.getWalletConnectConnector();
+  await walletConnectConnector.authenticate();
+
+  // Connect with wagmi to store the session
+  const wagmiConnector = this.getWagmiConnector('walletConnect');
+  const res = await connect(this.wagmiConfig, {
+    connector: wagmiConnector,
+    chainId: chainId ? Number(chainId) : undefined
+  });
+
+  // Switch chain if needed
+  if (res.chainId !== Number(chainId)) {
+    await switchChain(this.wagmiConfig, { chainId: res.chainId });
+  }
+
+  return { clientId: await walletConnectConnector.provider.client.core.crypto.getClientId() };
+}
+```
+
+### 2. 注入钱包
+
+注入式钱包（例如 MetaMask）是将提供商注入网页的浏览器扩展程序。AppKit 会检测并与这些提供商进行交互。
+
+```js
+// Injected wallet connection is added during adapter initialization
+if (options.enableInjected !== false) {
+  customConnectors.push(injected({ shimDisconnect: true }));
+}
+```
+
+### 3. 电子邮件和社交登录
+
+AppKit 通过 W3mFrameProvider 提供电子邮件和社交登录选项，它利用安全的 iframe 进行身份验证。
+
+### 4. EIP-6963 浏览器钱包
+
+AppKit 支持 EIP-6963 标准，用于检测和连接宣布其存在的浏览器钱包。
+
+```js
+// EIP-6963 event handling
+private eip6963EventHandler(event: CustomEventInit<EIP6963ProviderDetail>) {
+  if (event.detail) {
+    const { info, provider } = event.detail;
+    const existingConnector = this.connectors?.find(c => c.name === info?.name);
+
+    if (!existingConnector) {
+      this.addConnector({
+        id: info?.rdns || info?.name || info?.uuid,
+        type: 'ANNOUNCED',
+        imageUrl: info?.icon,
+        name: info?.name || 'Unknown',
+        provider,
+        info,
+        chain: this.namespace,
+        chains: []
+      });
+    }
+  }
+}
+```
+
+## 五、事件系统和状态管理
+
+连接流依赖于事件系统来管理状态变化和组件之间的通信：
+
+### 重要事件
+
+1. **accountChanged**：当连接的钱包账户发生变化时触发
+2. **switchNetwork**：当用户切换到不同的网络/链时触发
+3. **disconnect**：钱包断开连接时触发
+4. **pendingTransactions**：检测到新的待处理交易时触发
+
+### 事件处理
+
+每个适配器都为提供程序事件实现事件监听器，并向 AppKit 系统发出标准化事件：
+
+```ts
+private listenProviderEvents(provider: Provider | CombinedProvider) {
+  const disconnect = () => {
+    this.removeProviderListeners(provider);
+    this.emit('disconnect');
+  };
+
+  const accountsChangedHandler = (accounts: string[]) => {
+    if (accounts.length > 0) {
+      this.emit('accountChanged', {
+        address: accounts[0] as `0x${string}`
+      });
+    } else {
+      disconnect();
+    }
+  };
+
+  const chainChangedHandler = (chainId: string) => {
+    const chainIdNumber = typeof chainId === 'string' 
+      ? EthersHelpersUtil.hexStringToNumber(chainId) 
+      : Number(chainId);
+
+    this.emit('switchNetwork', { chainId: chainIdNumber });
+  };
+
+  provider.on('disconnect', disconnect);
+  provider.on('accountsChanged', accountsChangedHandler);
+  provider.on('chainChanged', chainChangedHandler);
+}
+```
