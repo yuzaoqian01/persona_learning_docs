@@ -278,6 +278,8 @@ const { connect: connectBitcoin } = useAppKitWallet({
 
 <p style="color:red;">签名消息格式 消息格式（参考 EIP-4361 风格）遵循CAIP-122 而不是简单的自定义字符串拼接</p>
 
+使用 X 登录标准由 [CAIP-122](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-122.md) 定义。它对`地址`字段使用 [CAIP-10](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-10) 标识符，对 `chain-id` 使用 [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-2)。
+
 **SIWX** 用作 AppKit 的插件系统，您将在 AppKit 配置中添加插件。有一些方法可以实现 **SIWX** 功能：
 
 - 使用 Reown Authentication 管理 Reown Dashboard 中的会话
