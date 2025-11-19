@@ -32,7 +32,7 @@ React Fiber 重写的动机主要有三个：
 
 每个 Fiber 对象大致包含以下属性：
 
-```
+```js
 Fiber {
   type: Component,        // 组件类型
   key: string | null,     // 唯一标识
@@ -50,7 +50,7 @@ Fiber {
 
 **关系示意：**
 
-```
+```css
 Fiber(root)
  ├─ child -> Fiber(A)
  │    ├─ child -> Fiber(B)

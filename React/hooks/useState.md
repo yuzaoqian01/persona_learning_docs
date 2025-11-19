@@ -69,13 +69,13 @@ const [value, setValue] = useState(() => {
 
 如果新状态依赖于旧状态，最好使用 **函数形式**：
 
-```
+```jsx
 setCount(prevCount => prevCount + 1);
 ```
 
 这样可以避免异步更新导致的问题，例如：
 
-```
+```jsx
 <button onClick={() => setCount(count + 1)}>Increment</button>
 <button onClick={() => setCount(count + 1)}>Increment</button>
 ```
@@ -88,7 +88,7 @@ setCount(prevCount => prevCount + 1);
 
 React 18 及以上版本中，**在事件处理器、生命周期中多次调用 `setState` 会批量合并**：
 
-```
+```jsx
 setCount(c => c + 1);
 setCount(c => c + 1); // 最终增加 2
 ```
@@ -101,7 +101,7 @@ setCount(c => c + 1); // 最终增加 2
 
 ### 5.1 对象状态
 
-```
+```jsx
 const [user, setUser] = useState({ name: "", age: 0 });
 
 setUser(prev => ({ ...prev, name: "Alice" })); // 保留 age
@@ -109,7 +109,7 @@ setUser(prev => ({ ...prev, name: "Alice" })); // 保留 age
 
 ### 5.2 数组状态
 
-```
+```jsx
 const [items, setItems] = useState([1, 2, 3]);
 
 // 添加元素
@@ -127,7 +127,7 @@ setItems(prev => prev.filter(item => item !== 2));
 
 在事件或异步回调中，状态可能会被“捕获”，导致拿到的是旧值：
 
-```
+```jsx
 const [count, setCount] = useState(0);
 
 function handleClick() {
@@ -140,7 +140,7 @@ function handleClick() {
 
 **解决方法：使用函数形式更新**
 
-```
+```jsx
 setCount(prevCount => prevCount + 1);
 ```
 
