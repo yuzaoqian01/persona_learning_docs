@@ -231,99 +231,138 @@ export interface PagingResult<T> {
 
 export interface PagingApiParams {
   page: number;
-  pageSize: number;
+  page_size: number;
   [key: string]: any;
 }
 
 export interface UsePagingListOptions<P extends object = {}> {
-  pageSize?: number;
+  page_size?: number;
   initParams?: P;
-
-  // ⭐ 错误回调（可选）
   onError?: (error: unknown, type: "loadMore" | "refresh") => void;
 }
 
-export function usePagingList<T, P extends object = {}>(
+export function usePagingList<T extends Record<string, any>, P extends object = {}>(
   api: (params: PagingApiParams & P) => Promise<PagingResult<T>>,
   options: UsePagingListOptions<P> = {}
 ) {
-  const { pageSize = 20, initParams = {} as P, onError } = options;
+  const { page_size = 10, initParams = {} as P, onError } = options;
 
   const [list, setList] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [noData, setNoData] = useState(false);
+  const [isEnd, setIsEnd] = useState(false);
 
-  const loadLock = useRef(false);
   const pageRef = useRef(1);
   const hasMoreRef = useRef(true);
   const paramsRef = useRef<P>(initParams);
 
-  const getItems = (res: PagingResult<T>): T[] => {
-    return res.items || res.data || res.list || [];
-  };
+  const refreshLock = useRef(false);
+  const loadMoreLock = useRef(false);
 
-  const updateParams = (newParams: Partial<P>) => {
+  // 支持多个失败请求重试
+  const failedRequestsRef = useRef<{ type: "loadMore" | "refresh"; params: PagingApiParams & P }[]>([]);
+
+  const getItems = (res: PagingResult<T>): T[] => res.items || res.data || res.list || [];
+
+  const updateParams = (newParams: Partial<P>, autoRefresh = true) => {
     paramsRef.current = { ...paramsRef.current, ...newParams };
-    refresh();
+    if (autoRefresh) refresh();
   };
 
-  const loadMore = async () => {
-    if (loadLock.current) return;
-    if (!hasMoreRef.current) return;
+  const execute = async (type: "loadMore" | "refresh", params: PagingApiParams & P) => {
+    const lock = type === "refresh" ? refreshLock : loadMoreLock;
+    const setStateLoading = type === "refresh" ? setRefreshing : setLoading;
 
-    loadLock.current = true;
-    setLoading(true);
+    if (lock.current) return;
+    lock.current = true;
     setError(null);
+    setStateLoading(true);
 
     try {
-      const res = await api({
-        page: pageRef.current,
-        pageSize,
-        ...paramsRef.current,
-      });
+      // 成功时清除对应失败请求
+      failedRequestsRef.current = failedRequestsRef.current.filter(fr => fr.params !== params || fr.type !== type);
 
+      const res = await api(params);
       const items = getItems(res);
-      setList((prev) => [...prev, ...items]);
+      const total = Number(res.total ?? Infinity);
 
-      pageRef.current += 1;
-      hasMoreRef.current = items.length >= pageSize;
+      const isNoData = total <= 0;
+      const hasMore = pageRef.current * page_size < total;
+
+      if (type === "refresh") {
+        setList(items);
+        pageRef.current = 2;
+      } else {
+        setList(prev => [...prev, ...items]);
+        if (hasMore) pageRef.current += 1;
+      }
+
+      hasMoreRef.current = hasMore;
+      setNoData(isNoData);
+      setIsEnd(isNoData || !hasMore);
+
     } catch (err) {
       setError(err);
-      onError?.(err, "loadMore");
+      onError?.(err, type);
+      failedRequestsRef.current.push({ type, params });
     } finally {
-      loadLock.current = false;
+      lock.current = false;
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const refresh = async () => {
-    if (loadLock.current) return;
+  const loadMore = async () => {
+    if (!hasMoreRef.current) return;
+    await execute("loadMore", {
+      page: pageRef.current,
+      page_size,
+      ...paramsRef.current,
+    });
+  };
 
-    loadLock.current = true;
-    setRefreshing(true);
-    setError(null);
+  const refresh = async () => {
+    pageRef.current = 1;
+    hasMoreRef.current = true;
+    await execute("refresh", {
+      page: 1,
+      page_size,
+      ...paramsRef.current,
+    });
+  };
+
+  const retry = async () => {
+    const queue = [...failedRequestsRef.current];
+    failedRequestsRef.current = [];
+    for (const { type, params } of queue) {
+      await execute(type, params);
+    }
+  };
+
+  /** 更新 list 中某一项，按 key/value 匹配 */
+  const updateItem = (key: keyof T, value: any, updater: (item: T) => T) => {
+    setList(prev => prev.map(item => (item[key] === value ? updater(item) : item)));
+  };
+
+  /** 乐观更新：先更新 UI，再执行异步操作，失败回滚（不会覆盖其他操作） */
+  const updateItemOptimistic = async (
+    key: keyof T,
+    value: any,
+    updater: (item: T) => T,
+    apiCall?: () => Promise<any>
+  ) => {
+    const snapshot = list.map(item => ({ ...item }));
+    updateItem(key, value, updater);
 
     try {
-      pageRef.current = 1;
-      hasMoreRef.current = true;
-
-      const res = await api({
-        page: 1,
-        pageSize,
-        ...paramsRef.current,
-      });
-
-      const items = getItems(res);
-      setList(items);
-
-      pageRef.current += 1;
-    } catch (err) {
-      setError(err);
-      onError?.(err, "refresh");
-    } finally {
-      loadLock.current = false;
-      setRefreshing(false);
+      if (apiCall) await apiCall();
+    } catch {
+      setList(prev => prev.map(item => {
+        const original = snapshot.find(s => s[key] === item[key]);
+        return original ? original : item;
+      }));
     }
   };
 
@@ -331,12 +370,18 @@ export function usePagingList<T, P extends object = {}>(
     list,
     loading,
     refreshing,
-    error, // ⭐ 对外暴露错误信息，UI 可做提示
+    error,
+    noData,
+    isEnd,
+    hasMore: hasMoreRef.current,
+    params: paramsRef.current,
+
     loadMore,
     refresh,
+    retry,
     updateParams,
-    params: paramsRef.current,
-    hasMore: hasMoreRef.current,
+    updateItem,
+    updateItemOptimistic,
   };
 }
 
