@@ -27,7 +27,12 @@ document.addEventListener(
 
 ```css
 html, body { overflow: hidden; height: 100%; }
-.scroll-container { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.scroll-container { 
+  overflow-y: auto; 
+  -webkit-overflow-scrolling: touch;
+  -ms-overflow-style: none; /* IE 滚动条隐藏 */
+  scrollbar-width: none; /* Firefox 滚动条隐藏 */
+}
 
 ```
 
