@@ -24,3 +24,48 @@ const debouncedAmount = useDebounce(amout, 500);
     },[debouncedAmount])
 ```
 
+```ts
+import { useCallback, useRef } from 'react';
+
+export function useDebounceFn<T extends (...args: any[]) => any>(
+  fn: T,
+  wait: number = 300
+) {
+  const timer = useRef<NodeJS.Timeout | null>(null);
+
+  const run = useCallback(
+    (...args: Parameters<T>) => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+      }
+
+      timer.current = setTimeout(() => {
+        fn(...args);
+      }, wait);
+    },
+    [fn, wait]
+  );
+
+  const cancel = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+
+  const flush = useCallback(
+    (...args: Parameters<T>) => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+        fn(...args);
+      }
+    },
+    [fn]
+  );
+
+  return { run, cancel, flush };
+}
+
+```
+
