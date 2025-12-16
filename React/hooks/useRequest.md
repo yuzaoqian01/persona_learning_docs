@@ -1,7 +1,9 @@
 ```ts
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+type Service<TData, TParams extends any[]> = (...args: TParams) => Promise<TData>;
 
 interface UseRequestOptions<TData, TParams extends any[]> {
   manual?: boolean;
@@ -9,7 +11,7 @@ interface UseRequestOptions<TData, TParams extends any[]> {
   onBefore?: (params: TParams) => void;
   onSuccess?: (data: TData, params: TParams) => void;
   onError?: (e: Error, params: TParams) => void;
-  onFinally?: (params: TParams, data?: TData, e?: Error) => void;
+  onFinally?: (params: TParams, data?: TData, e?: Error | null) => void;
   retryCount?: number;
   retryInterval?: number;
   loadingDelay?: number;
@@ -17,195 +19,372 @@ interface UseRequestOptions<TData, TParams extends any[]> {
   debounceInterval?: number;
   throttleInterval?: number;
   cacheKey?: string;
+  cacheTime?: number; // ms to keep cache (stale => undefined)
   refreshOnWindowFocus?: boolean;
+  throwOnError?: boolean; // whether runAsync should rethrow
 }
 
-const cacheMap = new Map<string, any>();
+const defaultOptions = {
+  manual: false,
+  retryCount: 0,
+  retryInterval: 1000,
+  loadingDelay: 0,
+  throwOnError: false,
+} as const;
 
-export function useRequest<Service extends (...args: any[]) => Promise<any>>(
-  service: Service,
-  options: UseRequestOptions<
-    Service extends (...args: any[]) => Promise<infer R> ? R : any,
-    Service extends (...args: infer P) => Promise<any> ? P : any[]
-  > = {}
+const internalCache = new Map<
+  string,
+  { time: number; data: any; cacheTime?: number }
+>();
+
+export function useRequest<TData, TParams extends any[] = any[]>(
+  service: Service<TData, TParams>,
+  options?: UseRequestOptions<TData, TParams>
 ) {
-  type TData = Service extends (...args: any[]) => Promise<infer R> ? R : any;
-  type TParams = Service extends (...args: infer P) => Promise<any> ? P : any[];
+  const opt = { ...defaultOptions, ...(options || {}) } as Required<
+    UseRequestOptions<TData, TParams>
+  > & { throwOnError: boolean };
 
-  const {
-    manual = false,
-    defaultParams,
-    onBefore,
-    onSuccess,
-    onError,
-    onFinally,
-    retryCount = 0,
-    retryInterval = 1000,
-    loadingDelay = 0,
-    pollingInterval,
-    debounceInterval,
-    throttleInterval,
-    cacheKey,
-    refreshOnWindowFocus = false,
-  } = options;
-
-  const [data, setData] = useState<TData | undefined>(cacheKey ? cacheMap.get(cacheKey) : undefined);
+  // state
+  const [data, setData] = useState<TData | undefined>(() => {
+    if (opt.cacheKey) {
+      const entry = internalCache.get(opt.cacheKey);
+      if (entry) {
+        // if cacheTime provided and expired => ignore
+        if (!entry.cacheTime || Date.now() - entry.time <= entry.cacheTime) {
+          return entry.data as TData;
+        }
+        internalCache.delete(opt.cacheKey);
+      }
+    }
+    return undefined;
+  });
   const [error, setError] = useState<Error | undefined>();
   const [loading, setLoading] = useState(false);
 
-  const paramsRef = useRef<TParams | undefined>(defaultParams);
-  const isRequestingRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const loadingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const throttleRef = useRef(false);
-
+  // refs
   const serviceRef = useRef(service);
   serviceRef.current = service;
 
-  const fetchData = useCallback(
-    async (...args: TParams): Promise<TData | undefined> => {
-      if (isRequestingRef.current) return;
-      isRequestingRef.current = true;
+  const paramsRef = useRef<TParams | undefined>(opt.defaultParams);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isUnmountedRef = useRef(false);
 
-      const finalParams = args.length ? args : (paramsRef.current || ([] as unknown as TParams));
+  // concurrency control: allow concurrent requests but track lastRequestId to support "latestOnly" behavior
+  const lastRequestIdRef = useRef(0);
+
+  // timers
+  const loadingTimerRef = useRef<number | null>(null);
+  const debounceTimerRef = useRef<number | null>(null);
+  const throttleLastTimeRef = useRef<number>(0);
+  const pollingTimerRef = useRef<number | null>(null);
+
+  // ---- helpers ----
+
+  const setCache = useCallback(
+    (key: string, val: TData) => {
+      const entry = { time: Date.now(), data: val, cacheTime: opt.cacheTime };
+      internalCache.set(key, entry);
+    },
+    [opt.cacheTime]
+  );
+
+  const clearTimers = useCallback(() => {
+    if (loadingTimerRef.current) {
+      clearTimeout(loadingTimerRef.current);
+      loadingTimerRef.current = null;
+    }
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }, []);
+
+  // Utility to decide whether we should append AbortSignal to service args.
+  // This is a best-effort heuristic: if service.length > params.length, pass signal as last arg.
+  function callServiceWithSignalIfNeeded(params: TParams, signal?: AbortSignal) {
+    try {
+      // If service expects more args than passed, append signal.
+      // This is a non-breaking heuristic: if service doesn't accept it, JS will still call but extra args are ignored by many implementations.
+      if (signal !== undefined && serviceRef.current.length >= (params?.length ?? 0) + 1) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore - dynamic call
+        return serviceRef.current(...params, signal);
+      }
+      // otherwise just call with params
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      return serviceRef.current(...params);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  // core fetch function
+  const fetchData = useCallback(
+    async (...args: TParams): Promise<TData> => {
+      const requestId = ++lastRequestIdRef.current;
+      const finalParams = (args && args.length ? args : paramsRef.current) as TParams;
       paramsRef.current = finalParams;
 
-      onBefore?.(finalParams);
+      opt.onBefore?.(finalParams);
       setError(undefined);
 
-      if (loadingDelay > 0) {
-        loadingTimerRef.current = setTimeout(() => setLoading(true), loadingDelay);
+      // loading delay
+      if (opt.loadingDelay > 0) {
+        loadingTimerRef.current = window.setTimeout(() => {
+          setLoading(true);
+        }, opt.loadingDelay);
       } else {
         setLoading(true);
       }
 
+      // abort previous
+      abortControllerRef.current?.abort();
+      const ac = new AbortController();
+      abortControllerRef.current = ac;
+
+      let lastError: Error | null = null;
       let result: TData | undefined;
-      let finalError: Error | undefined;
 
       try {
+        // retry loop
         let attempt = 0;
-        while (attempt <= retryCount) {
+        while (true) {
           try {
-            abortControllerRef.current = new AbortController();
-            result = await serviceRef.current(...finalParams, abortControllerRef.current.signal);
+            // call service (maybe with signal)
+            // if service supports AbortSignal as last arg, above function will append it
+            // eslint-disable-next-line @typescript-eslint/await-thenable
+            const res = await callServiceWithSignalIfNeeded(finalParams, ac.signal);
+            result = res as TData;
             break;
           } catch (e: any) {
-            if (e.name === 'AbortError') throw e;
+            // If aborted, just throw immediately
+            if (e && (e.name === 'AbortError' || ac.signal.aborted)) {
+              throw e;
+            }
             attempt++;
-            if (attempt > retryCount) throw e;
-            await sleep(retryInterval);
+            lastError = e instanceof Error ? e : new Error(String(e));
+            if (attempt > opt.retryCount) {
+              throw lastError;
+            }
+            // wait before retrying
+            // allow abort during sleep
+            const waitPromise = sleep(opt.retryInterval);
+            // race between abort and sleep
+            await Promise.race([
+              waitPromise,
+              new Promise((_, rej) => {
+                ac.signal.addEventListener(
+                  'abort',
+                  () => rej(new DOMException('Aborted', 'AbortError')),
+                  { once: true }
+                );
+              }),
+            ]);
+            // continue to next attempt
           }
         }
 
-        if (result !== undefined) {
-          if (cacheKey) cacheMap.set(cacheKey, result);
-          setData(result);
-          onSuccess?.(result, finalParams);
+        // Only update state if not unmounted and if this request is the latest one
+        if (!isUnmountedRef.current && requestId === lastRequestIdRef.current) {
+          if (opt.cacheKey && result !== undefined) {
+            setCache(opt.cacheKey, result);
+          }
+          setData(result as TData);
+          opt.onSuccess?.(result as TData, finalParams);
         }
 
-        return result;
-      } catch (e: any) {
-        finalError = e;
-        setError(e);
-        onError?.(e, finalParams);
+        return result as TData;
+      } catch (err: any) {
+        if (!isUnmountedRef.current && requestId === lastRequestIdRef.current) {
+          const thrown = err instanceof Error ? err : new Error(String(err));
+          setError(thrown);
+          opt.onError?.(thrown, finalParams);
+        }
+        // rethrow for runAsync depending on throwOnError
+        if (opt.throwOnError) {
+          throw err;
+        }
+        // otherwise return a rejected promise so callers can still await failure if they want
+        return Promise.reject(err);
       } finally {
+        // cleanup loading timer and state if still the latest
         if (loadingTimerRef.current) {
           clearTimeout(loadingTimerRef.current);
           loadingTimerRef.current = null;
         }
-        setLoading(false);
-        isRequestingRef.current = false;
-        onFinally?.(finalParams, result, finalError);
+        if (!isUnmountedRef.current && requestId === lastRequestIdRef.current) {
+          setLoading(false);
+          opt.onFinally?.(finalParams, result, lastError);
+        }
       }
     },
-    [retryCount, retryInterval, loadingDelay, cacheKey, onBefore, onSuccess, onError, onFinally]
+    [
+      opt.loadingDelay,
+      opt.onBefore,
+      opt.onSuccess,
+      opt.onError,
+      opt.onFinally,
+      opt.retryCount,
+      opt.retryInterval,
+      opt.cacheKey,
+      opt.throwOnError,
+      setCache,
+    ]
   );
 
-  let run: (...args: TParams) => Promise<TData | undefined> = fetchData;
-  if (debounceInterval) {
-    run = ((...args: TParams) => {
-      return new Promise<TData | undefined>(resolve => {
+  // ---- wrappers: debounce / throttle ----
+
+  const runRef = useRef<( ...args: TParams ) => Promise<TData>>();
+  runRef.current = fetchData;
+
+  const run = useCallback(
+    (...args: TParams): Promise<TData | undefined> => {
+      // debounce
+      if (opt.debounceInterval && opt.debounceInterval > 0) {
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = setTimeout(() => resolve(fetchData(...args)), debounceInterval);
-      });
-    }) as typeof fetchData;
-  } else if (throttleInterval) {
-    run = ((...args: TParams) => {
-      if (!throttleRef.current) {
-        throttleRef.current = true;
-        fetchData(...args).finally(() => {
-          setTimeout(() => (throttleRef.current = false), throttleInterval);
+        return new Promise((resolve, reject) => {
+          debounceTimerRef.current = window.setTimeout(() => {
+            runRef.current!(...args)
+              .then(d => resolve(d))
+              .catch(e => reject(e));
+            debounceTimerRef.current = null;
+          }, opt.debounceInterval) as unknown as number;
         });
       }
-      return Promise.resolve(undefined);
-    }) as typeof fetchData;
-  }
 
-  useEffect(() => {
-    if (!manual) run(...(defaultParams || ([] as unknown as TParams)));
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [manual]);
+      // throttle
+      if (opt.throttleInterval && opt.throttleInterval > 0) {
+        const now = Date.now();
+        if (now - throttleLastTimeRef.current >= opt.throttleInterval) {
+          throttleLastTimeRef.current = now;
+          return runRef.current!(...args).catch(e => Promise.reject(e));
+        } else {
+          // return last promise? For simplicity return a resolved undefined to mimic ahooks behavior where calls during throttle window are ignored.
+          // But better: return a promise that resolves when allowed — that complicates logic.
+          return Promise.resolve(undefined as unknown as TData);
+        }
+      }
 
-  useEffect(() => {
-    if (!pollingInterval) return;
-    timerRef.current = setInterval(() => run(...(paramsRef.current || ([] as unknown as TParams))), pollingInterval);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [pollingInterval]);
-
-  useEffect(() => {
-    if (!refreshOnWindowFocus) return;
-    const handleRefresh = () => run(...(paramsRef.current || ([] as unknown as TParams)));
-    window.addEventListener('focus', handleRefresh);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') handleRefresh();
-    });
-    return () => {
-      window.removeEventListener('focus', handleRefresh);
-      document.removeEventListener('visibilitychange', handleRefresh);
-    };
-  }, [refreshOnWindowFocus]);
-
-  const mutate = useCallback(
-    (newData?: TData | ((oldData?: TData) => TData | undefined)) => {
-      setData(prev => {
-        const value = typeof newData === 'function' ? (newData as any)(prev) : newData;
-        if (cacheKey && value !== undefined) cacheMap.set(cacheKey, value);
-        return value;
-      });
+      // default immediate
+      return runRef.current!(...args).catch(e => Promise.reject(e));
     },
-    [cacheKey]
+    [opt.debounceInterval, opt.throttleInterval]
   );
 
+  // runAsync: always calls fetchData directly (no debounce/throttle), returns promise and respects throwOnError option
+  const runAsync = useCallback((...args: TParams) => {
+    return fetchData(...args);
+  }, [fetchData]);
+
+  // mutate
+  const mutate = useCallback(
+    (newData: TData | ((oldData?: TData) => TData | undefined)) => {
+      setData(prev => {
+        const next = typeof newData === 'function' ? (newData as any)(prev) : newData;
+        if (opt.cacheKey && next !== undefined) {
+          setCache(opt.cacheKey, next as TData);
+        }
+        return next as TData | undefined;
+      });
+    },
+    [opt.cacheKey, setCache]
+  );
+
+  // cancel
   const cancel = useCallback(() => {
     abortControllerRef.current?.abort();
-    isRequestingRef.current = false;
+    abortControllerRef.current = null;
+    // mark this request as stale so its finally handlers won't overwrite state
+    lastRequestIdRef.current++;
     setLoading(false);
   }, []);
 
+  // refresh (use last params)
   const refresh = useCallback(() => {
-    if (paramsRef.current) run(...paramsRef.current);
-  }, []);
+    if (paramsRef.current) {
+      // use debounce/throttle behavior in run
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      run(...(paramsRef.current as TParams));
+    }
+  }, [run]);
 
   const refreshAsync = useCallback(() => {
-    if (paramsRef.current) return run(...paramsRef.current);
+    if (paramsRef.current) {
+      return fetchData(...(paramsRef.current as TParams));
+    }
     return Promise.resolve(undefined as unknown as TData);
+  }, [fetchData]);
+
+  // initial auto run
+  useEffect(() => {
+    if (!opt.manual) {
+      // if there's cacheKey and cache exists and not expired, we already set data via initial state
+      // still may want to fetch again depending on requirements. ahooks usually fetches even if cache exists depending on staleTime.
+      run(...(opt.defaultParams as TParams));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // polling
+  useEffect(() => {
+    if (opt.pollingInterval && opt.pollingInterval > 0) {
+      pollingTimerRef.current = window.setInterval(() => {
+        // use run so debounce/throttle behavior applies
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        run(...(paramsRef.current as TParams));
+      }, opt.pollingInterval) as unknown as number;
+      return () => {
+        if (pollingTimerRef.current) {
+          clearInterval(pollingTimerRef.current);
+          pollingTimerRef.current = null;
+        }
+      };
+    }
+    return;
+  }, [opt.pollingInterval, run]);
+
+  // refresh on focus
+  useEffect(() => {
+    if (!opt.refreshOnWindowFocus) return;
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') {
+        run(...(paramsRef.current as TParams));
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [opt.refreshOnWindowFocus, run]);
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      isUnmountedRef.current = true;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      clearTimers();
+    };
+  }, [clearTimers]);
+
+  // expose params as readonly snapshot
+  const paramsSnapshot = paramsRef.current ?? ([] as unknown as TParams);
 
   return {
     loading,
     data,
     error,
-    params: paramsRef.current || ([] as unknown as TParams),
+    params: paramsSnapshot,
     run,
-    runAsync: fetchData,
+    runAsync,
     refresh,
     refreshAsync,
     mutate,
