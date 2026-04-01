@@ -35,3 +35,31 @@ supabase stop
 supabase link --project-ref ********************
 ```
 
+```cmd
+supabase functions deploy ${functionName}
+```
+
+```cmd
+查看本地 migration
+supabase migration list
+.本地所有 migration 文件
+.已应用 / 未应用状态
+```
+
+
+
+```cmd
+查看远程数据库 migration 状态
+supabase db remote commit
+```
+
+```cmd
+生成新的迁移
+supabase migration new xxx
+```
+
+```cmd
+数据迁移推送
+supabase db push
+```
+
