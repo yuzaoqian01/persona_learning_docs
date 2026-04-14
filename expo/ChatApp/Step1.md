@@ -305,3 +305,33 @@ export function setThemePreference(preference: ThemePreference): void {
 
 ```
 
+### 更改子页面header borderBottom 颜色 
+
+```TSX
+ <Stack
+      screenOptions={{
+        headerTintColor: theme.colors.onBackground,
+        headerTitleAlign: "center",
+        headerBackButtonDisplayMode: "minimal",
+        headerShadowVisible: false, //关掉系统那条阴影/细线，避免叠两层
+        headerTitleStyle: { color: theme.colors.onBackground },
+        headerBackground: () => ( // 在导航栏后面铺一层自己的 View，在上面画 borderBottomColor
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: theme.colors.background,
+              borderBottomWidth: StyleSheet.hairlineWidth,
+              borderBottomColor: theme.colors.outline,
+            }}
+          />
+        ),
+      }}
+    >
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="themes"
+        options={{ headerShown: true, title: "主题设置" }}
+      />
+    </Stack>
+```
+
