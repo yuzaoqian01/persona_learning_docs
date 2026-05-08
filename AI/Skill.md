@@ -258,7 +258,7 @@ description: 自定义前端组件生成器
 
 **第二步：编写配置文件 skill.json**
 
-```
+```json
 {
   "name": "my-component-generator",
   "version": "1.0.0",
@@ -270,7 +270,7 @@ description: 自定义前端组件生成器
 
 **第三步：编写主逻辑 [main.py](http://main.py/)**
 
-```
+```jsx
 import json
 from jinja2 import Template
 
