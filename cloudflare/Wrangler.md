@@ -112,7 +112,7 @@ wrangler r2 bucket create my-bucket
 
 # wrangler.toml 样例
 
-```
+```toml
 name = "my-worker"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
@@ -127,3 +127,138 @@ ENV = "dev"
 
 ------
 
+```json
+{
+  "name": "im-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-07",
+
+  "durable_objects": { // DO配置
+    "bindings": [
+      {
+        "name": "CONVERSATION",
+        "class_name": "ConversationDO"
+      }
+    ]
+  },
+
+  "migrations": [ 
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ConversationDO"]
+    }
+  ],
+
+  "kv_namespaces": [ // KV配置
+    {
+      "binding": "CACHE",
+      "id": "你的 KV namespace id"
+    }
+  ],
+
+  "r2_buckets": [ // R2 存储桶配置
+    {
+      "binding": "IM_BUCKET",
+      "bucket_name": "你的 R2 bucket 名"
+    }
+  ],
+
+  "d1_databases": [ // D1 配置
+    {
+      "binding": "DB",
+      "database_name": "im-db",
+      "database_id": "你的 D1 database id"
+    }
+  ]
+}
+```
+
+代码里这样访问：
+
+```ts
+export interface Env {
+  CONVERSATION: DurableObjectNamespace<ConversationDO>;
+  CACHE: KVNamespace;
+  IM_BUCKET: R2Bucket;
+  DB: D1Database;
+}
+```
+
+Worker 入口获取 DO：
+
+```ts
+const id = env.CONVERSATION.idFromName(conversationId);
+const stub = env.CONVERSATION.get(id);
+```
+
+DO 内访问绑定：
+
+```ts
+export class ConversationDO extends DurableObject<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+  }
+
+  async saveLastMessage(conversationId: string, message: unknown) {
+    await this.env.CACHE.put(
+      `conversation:last:${conversationId}`,
+      JSON.stringify(message),
+      { expirationTtl: 3600 },
+    );
+  }
+
+  async saveMessageToD1(message: {
+    conversationId: string;
+    seq: number;
+    messageId: string;
+    senderId: string;
+    body: string;
+    createdAt: number;
+  }) {
+    await this.env.DB.prepare(
+      `
+      INSERT INTO messages (
+        conversation_id,
+        seq,
+        message_id,
+        sender_id,
+        body,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      `,
+    )
+      .bind(
+        message.conversationId,
+        message.seq,
+        message.messageId,
+        message.senderId,
+        message.body,
+        message.createdAt,
+      )
+      .run();
+  }
+}
+```
+
+创建资源命令大概是：
+
+```cmd
+npx wrangler kv namespace create CACHE
+npx wrangler d1 create im-db
+npx wrangler r2 bucket create im-bucket
+```
+
+然后把输出的 `id` / `database_id` 填回 `wrangler.jsonc`。
+
+本地开发如果要预览：
+
+```
+npx wrangler dev
+```
+
+部署：
+
+```
+npx wrangler deploy
+```
