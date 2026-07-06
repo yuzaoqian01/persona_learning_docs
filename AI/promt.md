@@ -321,3 +321,76 @@ All methods must include detailed Chinese comments (purpose, parameters, return 
 Keep all code naming in English. All documentation and explanations must be in Chinese.
 ```
 
+```json
+## Cubit / State Rules
+
+1. Cubit is responsible for actions and state transitions only.
+   - Allowed: call repository/usecase, handle async results, emit new state.
+   - Avoid: UI rendering logic, navigation, dialogs, holding BuildContext.
+
+2. State is the single source of truth for UI.
+   - State must be immutable.
+   - All fields must be final.
+   - State should describe what the UI needs to render.
+
+3. Do not write complex condition combinations in Widget.
+   - Avoid:
+     `state.a && state.b && !state.c && state.d`
+   - Prefer:
+     `state.canSubmit`
+     `state.canWithdraw`
+     `state.shouldShowBackupTip`
+
+4. Simple derived UI conditions must be exposed as State getters.
+   - Example:
+     `bool get canSubmit => phone.isNotEmpty && !isLoading;`
+   - Example:
+     `bool get showEmpty => status.isSuccess && items.isEmpty;`
+
+5. Complex or reusable business rules must be extracted.
+   - Use `Permission`, `Rule`, `Validator`, or `UseCase`.
+   - Example:
+     `WithdrawPermission.canWithdraw(state)`
+     `CardApplyRule.canApply(state)`
+
+6. Prefer enum status over multiple mutually exclusive bool fields.
+   - Avoid:
+     `isLoading`, `isSuccess`, `isFailure`
+   - Prefer:
+     `LoadStatus.initial/loading/success/failure`
+
+7. Widget should consume semantic state only.
+   - UI can use:
+     `state.canSubmit`
+     `state.showEmpty`
+     `state.isLoading`
+   - UI should not know how these values are calculated.
+
+8. Use BlocSelector when a Widget only depends on one derived value.
+   - Prefer selecting:
+     `state.canSubmit`
+     `state.isLoading`
+     `state.items`
+
+9. When adding a State field, update all related code.
+   - constructor
+   - copyWith
+   - props
+   - initial value
+   - fromJson/toJson if used
+   - derived getters if affected
+
+10. Naming must express business meaning.
+   - Prefer:
+     `canWithdraw`
+     `canApplyCard`
+     `canSwap`
+     `shouldShowKycEntry`
+     `isSubmitEnabled`
+   - Avoid:
+     `flag`
+     `check`
+     `isOk`
+     `status1`
+```
+
